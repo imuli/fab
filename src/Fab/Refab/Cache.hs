@@ -13,10 +13,10 @@ module Fab.Refab.Cache
   , Cache
   ) where
 
+import           Control.Applicative (liftA2)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Data.Default (Default, def)
-import           Fab.Core (Fab, Refabber, fab, getConfig, getRefab, getValue, putRefab, refab,
-                     updateValue)
+import           Fab.Core (Fab, Refabber, finalize, getConfig, verify)
 import           GHC.Clock (getMonotonicTime)
 
 -- | How long to cache entries for `Cache`, in seconds.
@@ -36,18 +36,9 @@ newtype Cache = Cache CacheTimeout
 instance Default Cache where
   def = Cache (-1/0)
 
+now :: MonadIO f => f CacheTimeout
+now = CacheTimeout <$> liftIO getMonotonicTime
+
 instance (Fab k f, MonadIO f) => Refabber Cache k f where
-  refab f k = maybe record verify =<< getValue k
-    where
-      getTime = CacheTimeout <$> liftIO getMonotonicTime
-      record = do
-        v <- fab f k
-        t <- getTime
-        putRefab k (Cache t)
-        updateValue k v
-      verify v = do
-        Cache ft <- getRefab k
-        t <- getTime
-        ct <- getConfig
-        if t > ft + ct then record
-                       else pure v
+  finalize _ _ = const . Cache <$> liftA2 (+) getConfig now
+  verify _ _ _ (Cache expires) = (expires >) <$> now

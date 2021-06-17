@@ -11,9 +11,12 @@ module Fab
   , Fabber
     -- * Refabbers
   , Refabber(..)
+    -- ** Simple
   , Avoid
+    -- ** Caching
   , Cache
   , CacheTimeout
+    -- ** Tracing
   , VerifyTrace
     -- * Schedulers
   , simpleFab
@@ -21,7 +24,9 @@ module Fab
     -- * Store
   , FabT
   , runFabT
+  , HasFabStore
   , configure
+  , getExistingValue
   ) where
 
 import           Fab.Core

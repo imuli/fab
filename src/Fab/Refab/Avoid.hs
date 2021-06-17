@@ -12,7 +12,7 @@ module Fab.Refab.Avoid
   ) where
 
 import           Data.Default (Default, def)
-import           Fab.Core (Fab, Refabber, fab, getValue, refab, updateValue)
+import           Fab.Core (Fab, Refabber, verify)
 
 -- | Only fabricate a value when none is present.
 --
@@ -29,5 +29,5 @@ data Avoid
 instance Default Avoid where
   def = Avoid
 
-instance (Fab k f) => Refabber Avoid k f where
-  refab f k = maybe (updateValue k =<< fab f k) pure =<< getValue k
+instance Fab k f => Refabber Avoid k f where
+  verify _ _ _ _ = pure True

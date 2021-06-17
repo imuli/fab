@@ -1,9 +1,9 @@
 {-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 
 {-|
@@ -18,11 +18,13 @@ module Fab.Core
   , Fab(..)
   , Refabber(..)
   , HasFabStore(..)
+  , getExistingValue
   , configure
   , updateValue
   , modifyRefab
   ) where
 
+import           Data.Bool (bool)
 import           Data.Default (Default(def))
 import           Data.Functor.Const (Const(Const))
 import           Data.Hashable (Hashable)
@@ -55,7 +57,55 @@ class ( Show k, Eq k, Hashable k, Typeable k
 -- | Refabbers implement this typeclass, so that to change refabbers for a
 -- particular key you only need to change 'Refab'.
 class (Show i, Default i) => Refabber i k f where
+
+  -- | Update fabrication information given a final result.
+  --
+  -- This has type @f (i -> i)@ to allow queries to @f@, for example to allow
+  -- the 'Fab.Refab.Cache.Cache' refabber to check the time.
+  finalize :: (Refab k f ~ i, HasFabStore f, Applicative f) => k -> FabVal k f -> f (i -> i)
+  finalize _ _ = pure id
+
+  -- | Update fabrication information given a dependancy.
+  --
+  -- This has type @f (i -> i)@ to allow queries to @f@, mirroring finalize.
+  record :: (Refab k f ~ i, Fab t f, HasFabStore f, Applicative f) => k -> t -> FabVal t f -> f (i -> i)
+  record _ _ _ = pure id
+
+  -- | Verify a key-value-info set.
+  --
+  -- This may call the scheduler. 'Fab.Refab.VerifyTrace.VerifyTrace', for
+  -- example, will check to make sure all the immediate dependencies are up to
+  -- date.
+  verify :: (Refab k f ~ i, HasFabStore f, Monad f) => Scheduler f -> k -> FabVal k f -> i -> f Bool
+  verify _ _ _ _ = pure False
+
+  -- | Refabricate the key. The default implementation should suffice for most cases.
+  --
+  -- However, it only provides access to the immediate dependencies, so any
+  -- deep traces must reimplement this.
   refab :: (Refab k f ~ i, HasFabStore f, Monad f) => Fabber k f
+  default refab :: (Fab k f, Refab k f ~ i, HasFabStore f, Monad f) => Fabber k f
+  refab f k = maybe run check =<< getValue k
+    where
+      run :: f (FabVal k f)
+      run = do
+        v <- fab rec k
+        modifyRefab k =<< finalize k v
+        updateValue k v
+      rec :: forall t. Fab t f => t -> f (FabVal t f)
+      rec k' = do
+        v' <- f k'
+        modifyRefab k =<< record k k' v'
+        pure v'
+      check :: FabVal k f -> f (FabVal k f)
+      check v = getRefab k >>= verify f k v >>= bool run (pure v)
+
+-- | Get a value from the store, making sure that it is up to date, but don't rebuild it.
+--
+-- This may, depending on the 'Refab', rebuild any dependancies!
+getExistingValue :: (Fab k f, HasFabStore f, Monad f) => Scheduler f -> k -> f (Maybe (FabVal k f))
+getExistingValue f k = maybe (pure Nothing) check =<< getValue k
+  where check v = getRefab k >>= verify f k v >>= pure . bool Nothing (Just v)
 
 -- | Always fabricate the value, never store it.
 instance (Fab k f) => Refabber () k f where
