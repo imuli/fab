@@ -1,0 +1,7 @@
+result*
+dist*
+*.o
+*.ho
+*.hi
+*.swp
+*.swo

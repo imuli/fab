@@ -24,12 +24,18 @@ module Fab
     -- * Store
   , FabT
   , runFabT
-  , HasFabStore
+  , HasFabStore(..)
   , configure
   , getExistingValue
+    -- * Existential Wrappers
+  , FabKey(..)
+  , HoldsFabKey(..)
+  , FabPair(..)
+  , HoldsFabPair(..)
   ) where
 
 import           Fab.Core
+import           Fab.Existential
 import           Fab.Refab.Avoid
 import           Fab.Refab.Cache
 import           Fab.Refab.VerifyTrace
