@@ -32,6 +32,7 @@ module Fab
   , HoldsFabKey(..)
   , FabPair(..)
   , HoldsFabPair(..)
+  , putFabPair
   ) where
 
 import           Fab.Core
