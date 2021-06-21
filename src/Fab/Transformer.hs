@@ -18,6 +18,7 @@ import           Control.Applicative (Alternative)
 import           Control.Monad (MonadPlus)
 import           Control.Monad.IO.Class (MonadIO)
 import           Control.Monad.State.Strict (MonadState, StateT, gets, modify, runStateT)
+import           Control.Monad.Trans.Class (MonadTrans, lift)
 import           Data.Typeable (Typeable)
 
 import           Fab.Core (HasFabStore, getConfig, getRefab, getValue, putConfig, putRefab,
@@ -29,6 +30,8 @@ import           Fab.Store (FabStore, fabGetConfig, fabGetInfo, fabGetValue, fab
 newtype FabT m a = FabT (StateT (FabStore (FabT m)) m a)
   deriving (Applicative, Functor, Monad)
 
+instance MonadTrans FabT where
+  lift f = FabT $ lift f
 deriving instance MonadPlus m => Alternative (FabT m)
 deriving instance MonadPlus m => MonadPlus (FabT m)
 deriving instance MonadIO m => MonadIO (FabT m)
