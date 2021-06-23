@@ -40,6 +40,7 @@ import           Control.Exception (Exception, SomeException, fromException, toE
 import           Control.Monad ((>=>))
 import           Control.Monad.Catch (MonadCatch(catch), MonadThrow(throwM))
 import           Control.Monad.IO.Class (MonadIO, liftIO)
+import           Control.Monad.Trans.Class (MonadTrans, lift)
 import           Data.Default (Default)
 import           Data.Hashable (Hashable)
 import           Data.Typeable (Typeable)
@@ -211,3 +212,6 @@ instance Alternative f => Alternative (FabT f) where
 
 instance MonadIO f => MonadIO (FabT f) where
   liftIO f = FabT $ Value <$> liftIO f
+
+instance MonadTrans FabT where
+  lift f = FabT $ Value <$> f
