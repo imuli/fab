@@ -1,9 +1,17 @@
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 
 {-|
@@ -13,62 +21,78 @@ Description : The core types and type classes for Fab.
 -}
 
 module Fab.Core
-  ( Scheduler
-  , Fabber
+  ( FabKey
+  , FabValue
   , Fab(..)
+  , fab
+  , cachedFab
+  , config
+  , FabT(..)
+  , runFabT
+  , throw
+  , FabResult(..)
+  , FabRequest(..)
   , Refabber(..)
-  , HasFabStore(..)
-  , getExistingValue
-  , configure
-  , updateValue
-  , modifyRefab
   ) where
 
-import           Data.Bool (bool)
-import           Data.Default (Default(def))
-import           Data.Functor.Const (Const(Const))
+import           Control.Applicative (Alternative, empty, (<|>))
+import           Control.Exception (Exception, SomeException, fromException, toException)
+import           Control.Monad ((>=>))
+import           Control.Monad.Catch (MonadCatch(catch), MonadThrow(throwM))
+import           Control.Monad.IO.Class (MonadIO, liftIO)
+import           Data.Default (Default)
 import           Data.Hashable (Hashable)
 import           Data.Typeable (Typeable)
+import           Fab.Result (Result)
+import           GHC.Generics (Generic)
 
--- | For any fabrication key that can be fabricated in this 'Functor',
--- fabricate it's value.
-type Scheduler f = forall k. Fab k f => k -> f (FabVal k f)
+-- | Type helper to constrain your fabrication key (or segments there of).
+type FabKey k = (Show k, Typeable k, Eq k, Hashable k)
 
--- | Given a function to fabricate any key from it's value,
-type Fabber k f = Scheduler f -> k -> f (FabVal k f)
+-- | Type helper to constrain your fabrication values (or segments there of).
+type FabValue v = (Show v, Typeable v, Hashable v)
 
 -- | Fabricating a key in some 'Functor'.
-class ( Show k, Eq k, Hashable k, Typeable k
-      , Refabber (Refab k f) k f
-      , Show (FabVal k f), Hashable (FabVal k f)
-      ) => Fab k f where
+--
+-- You can't actually request fabrication of anything weaker than an
+-- 'Applicative', and can't run it in anything weaker than a 'Monad'...
+class (FabKey k, Refabber f k (Refab f k), FabValue (FabVal f k)) => Fab f k where
 
   -- | The information required to test whether we need to rebuild the key.
-  type family Refab k f
-  type instance Refab k f = ()
+  type family Refab f k
+  type instance Refab f k = ()
 
   -- | What sort of values does this key produce?
-  type family FabVal k f
+  type family FabVal f k
 
-  -- | Fabricate a specific key, given a function that can fabricate any other
-  -- fabricatable key.
-  fab :: Fabber k f
+  -- | Actually do the fabrication.
+  --
+  -- This should not call other versions of itself (unless you always want to
+  -- recreate a particular subgoal). Instead it should call 'fab'.
+  fabricate :: k -> FabT f (FabVal f k)
 
 -- | Refabbers implement this typeclass, so that to change refabbers for a
 -- particular key you only need to change 'Refab'.
-class (Show i, Default i) => Refabber i k f where
+--
+-- The general ideal is that we're given keys and 'Result's at various hooks in
+-- the process, which lets us record information about the build process. This
+-- is heavily designed for 'Fab.Trace.Trace'-derived 'Refabber's and may change
+-- if other types have more needs.
+--
+-- The defaults implementation keeps no information and never 'verify's.
+class (Show i, Default i) => Refabber f k i where
 
   -- | Update fabrication information given a final result.
   --
   -- This has type @f (i -> i)@ to allow queries to @f@, for example to allow
   -- the 'Fab.Refab.Cache.Cache' refabber to check the time.
-  finalize :: (Refab k f ~ i, HasFabStore f, Applicative f) => k -> FabVal k f -> f (i -> i)
+  finalize :: (Refab f k ~ i, Applicative f) => k -> Result (FabVal f k) -> f (i -> i)
   finalize _ _ = pure id
 
   -- | Update fabrication information given a dependancy.
   --
   -- This has type @f (i -> i)@ to allow queries to @f@, mirroring finalize.
-  record :: (Refab k f ~ i, Fab t f, HasFabStore f, Applicative f) => k -> t -> FabVal t f -> f (i -> i)
+  record :: (Refab f k ~ i, Fab f t, Applicative f) => k -> t -> Result (FabVal f t) -> f (i -> i)
   record _ _ _ = pure id
 
   -- | Verify a key-value-info set.
@@ -76,106 +100,114 @@ class (Show i, Default i) => Refabber i k f where
   -- This may call the scheduler. 'Fab.Refab.VerifyTrace.VerifyTrace', for
   -- example, will check to make sure all the immediate dependencies are up to
   -- date.
-  verify :: (Refab k f ~ i, HasFabStore f, Monad f) => Scheduler f -> k -> FabVal k f -> i -> f Bool
-  verify _ _ _ _ = pure False
+  verify :: (Refab f k ~ i, Monad f) => k -> Result (FabVal f k) -> i -> FabT f Bool
+  verify _ _ _ = pure False
 
-  -- | Refabricate the key. The default implementation should suffice for most cases.
-  --
-  -- However, it only provides access to the immediate dependencies, so any
-  -- deep traces must reimplement this.
-  refab :: (Refab k f ~ i, HasFabStore f, Monad f) => Fabber k f
-  default refab :: (Fab k f, Refab k f ~ i, HasFabStore f, Monad f) => Fabber k f
-  refab f k = maybe run check =<< getValue k
-    where
-      run :: f (FabVal k f)
-      run = do
-        v <- fab rec k
-        modifyRefab k =<< finalize k v
-        updateValue k v
-      rec :: forall t. Fab t f => t -> f (FabVal t f)
-      rec k' = do
-        v' <- f k'
-        modifyRefab k =<< record k k' v'
-        pure v'
-      check :: FabVal k f -> f (FabVal k f)
-      check v = getRefab k >>= verify f k v >>= bool run (pure v)
+instance Refabber f k ()
 
--- | Get a value from the store, making sure that it is up to date, but don't rebuild it.
+-- | Request something from the Scheduler.
+data FabRequest f k a where
+   -- | Request a configuration value.
+   ForConfig :: (Typeable k, Default k) => FabRequest f k k
+   -- | Request a that a key be fabricated.
+   ForKey :: Fab f k => k -> FabRequest f k (FabVal f k)
+   -- | Request a key from the store, but don't rebuild it if it's stale.
+   ForCachedKey :: Fab f k => k -> FabRequest f k (Maybe (FabVal f k))
+   -- | Request multiple things.
+   ForBoth :: FabRequest f k a -> FabRequest f k' a' -> FabRequest f (k, k') (a, a')
+
+deriving instance Show (FabRequest f k a)
+
+-- | Request that the scheduler fabricate this key.
+fab :: (Applicative f, Fab f k) => k -> FabT f (FabVal f k)
+fab k = FabT . pure $ Request (ForKey k) pure
+
+-- | Request the cached value for this key, if it's valid.
+cachedFab :: (Applicative f, Fab f k) => k -> FabT f (Maybe (FabVal f k))
+cachedFab k = FabT . pure $ Request (ForCachedKey k) pure
+
+-- | Request a config entry (of a particular type)
+config :: (Applicative f, Typeable a, Default a) => FabT f a
+config = FabT . pure $ Request ForConfig pure
+
+-- | The core fabrication 'Monad'.
 --
--- This may, depending on the 'Refab', rebuild any dependancies!
-getExistingValue :: (Fab k f, HasFabStore f, Monad f) => Scheduler f -> k -> f (Maybe (FabVal k f))
-getExistingValue f k = maybe (pure Nothing) check =<< getValue k
-  where check v = getRefab k >>= verify f k v >>= pure . bool Nothing (Just v)
+-- This leans heavily on the 'FabResult' Monad.
+newtype FabT f a = FabT (f (FabResult f a))
+  deriving (Generic)
 
--- | Always fabricate the value, never store it.
-instance (Fab k f) => Refabber () k f where
-  refab = fab
+-- | Compute as much of a 'FabT' as we can without outside help.
+runFabT :: FabT f a -> f (FabResult f a)
+runFabT (FabT a) = a
 
--- | An appropriate 'Functor' can hold fabrication products as well as the
--- information required to attempt to rebuild them.
-class HasFabStore f where
-  -- | Fetch a fabrication product for a key, if it exists.
-  getValue :: forall k. Fab k f => k -> f (Maybe (FabVal k f))
+instance Functor f => Functor (FabT f) where
+  fmap f mx = FabT $ fmap f <$> runFabT mx
 
-  -- | Update the stored fabrication product for a key.
-  putValue :: forall k. Fab k f => k -> (FabVal k f) -> f ()
+instance Applicative f => Applicative (FabT f) where
+  pure = FabT . pure . pure
+  ff <*> fa = FabT $ do
+    f <- runFabT ff
+    a <- runFabT fa
+    pure $ f <*> a
 
-  -- | Fetch the rebuild information for a fabrication key.
-  --
-  -- Note that this information is always a `Monoid` and thus can be
-  -- synthesized if needed.
-  getRefab :: forall k. Fab k f => k -> f (Refab k f)
+instance Monad f => Monad (FabT f) where
+  fa >>= f = FabT $ do
+    a <- runFabT fa
+    case a of
+         Value x     -> (runFabT <$> f) x
+         Error e     -> pure $ Error e
+         Request r c -> pure $ Request r $ c >=> f
 
-  -- | Update the rebuild information for a fabrication key.
-  putRefab :: forall k. Fab k f => k -> (Refab k f) -> f ()
-
-  -- | Fetch some configuration information of a particular type.
-  --
-  -- This is useful for things like a database backend (to carry connection
-  -- information), or caching rebuilders (which rebuild after some configurable
-  -- amount of time has passed).
-  getConfig :: forall c. (Default c, Typeable c) => f c
-  default getConfig :: Applicative f => forall c. (Default c) => f c
-  getConfig = pure def
-
-  -- | Replace configuration information of a particular type.
-  --
-  -- Typically this would only be called during setup.
-  putConfig :: forall c. (Typeable c) => c -> f ()
-  default putConfig :: Applicative f => forall c. c -> f ()
-  putConfig _ = pure ()
-
--- | A small helper to put a value into a store and then return it.
-updateValue :: (Fab k f, Applicative f, HasFabStore f) => k -> FabVal k f -> f (FabVal k f)
-updateValue k v = putValue k v *> pure v
-
--- | Modify the refab information for a key with a function.
-modifyRefab :: (Fab k f, Monad f, HasFabStore f) => k -> (Refab k f -> Refab k f) -> f ()
-modifyRefab k f = putRefab k =<< f <$> getRefab k
-
--- | Add configuration information.
+-- | The intermediate result 'Monad' for fabrication.
 --
--- Note that this should usually only be done before fabricating any products -
--- most refabbers will not check whether any configuration information has
--- changed! And there is no easy method to intercept what configuration
--- information is used for fabrication.
-configure :: (HasFabStore f, Typeable c) => (a -> c) -> a -> f ()
-configure f x = putConfig (f x)
+-- This allows us to collect requests until they are required.
+data FabResult f a
+   = Value a
+   | Error SomeException
+   | forall k b. Request (FabRequest f k b) (b -> FabT f a)
 
--- | The @Const m@ applicative functor cannot contain values, so it simply
--- discards everything. It can be used to calculate dependencies if the build
--- plan can be expressed in an applicative.
---
--- In essence, it always has an empty store.
-instance Monoid m => HasFabStore (Const m) where
-  getValue _ = Const mempty
-  putValue _ _ = Const mempty
-  getRefab _ = Const mempty
-  putRefab _ _ = Const mempty
+instance Show a => Show (FabResult f a) where
+  showsPrec prec (Value a)     = showParen (prec > 10) $ showString "Value " . showsPrec 11 a
+  showsPrec prec (Error e)     = showParen (prec > 10) $ showString "Error " . showsPrec 11 e
+  showsPrec prec (Request r _) = showParen (prec > 10) $ showString "Request " . showsPrec 11 r
 
--- | The 'Maybe' monad has a perpetually empty store.
-instance HasFabStore Maybe where
-  getValue _ = Just Nothing
-  putValue _ _ = Just ()
-  getRefab _ = Just def
-  putRefab _ _ = Just ()
+instance Functor f => Functor (FabResult f) where
+  fmap f (Value a)     = Value $ f a
+  fmap _ (Error e)     = Error e
+  fmap f (Request r c) = Request r $ fmap f <$> c
+
+instance Applicative f => Applicative (FabResult f) where
+  pure = Value
+  Value f <*> fa                = f <$> fa
+  Error e <*> _                 = Error e
+  Request r c <*> Value a       = Request r $ fmap ($ a) <$> c
+  Request r _ <*> Error e       = Request r $ \_ -> throw e
+  Request r c <*> Request r' c' = Request (ForBoth r r') (\(b,b') -> c b <*> c' b')
+
+instance Monad f => Monad (FabResult f) where
+  Value a >>= f     = f a
+  Error e >>= _     = Error e
+  Request r c >>= f = Request r $ c >=> FabT . pure . f
+
+-- | Provided for convenience for anyone who wants to throw an error in an
+-- applicative context.
+throw :: (Exception e, Applicative f) => e -> FabT f a
+throw = FabT . pure . Error . toException
+
+instance Monad f => MonadThrow (FabT f) where
+  throwM = throw
+
+instance Monad f => MonadCatch (FabT f) where
+  catch fa handle = FabT $ do
+    a <- runFabT fa
+    case a of
+         Value x     -> pure $ Value x
+         Error e     -> maybe (pure $ Error e) (runFabT <$> handle) (fromException e)
+         Request r c -> pure $ Request r $ \b -> catch (c b) handle
+
+instance Alternative f => Alternative (FabT f) where
+  empty = FabT empty
+  a <|> b = FabT $ runFabT a <|> runFabT b
+
+instance MonadIO f => MonadIO (FabT f) where
+  liftIO f = FabT $ Value <$> liftIO f

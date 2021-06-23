@@ -1,122 +1,75 @@
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeApplications #-}
 
 {-|
 Copyright   : Unlicense (Public Domain)
 Stability   : experimental
-Description : Storing fabrication products and rebuild information.
+Description : Fabrication stores and helpers.
 -}
 
 module Fab.Store
-  ( Storable
-    -- * Helpers for implementing 'Fab.Core.HasFabStore'.
-  , FabStore
-  , fabGetValue
-  , fabPutValue
-  , fabGetInfo
-  , fabPutInfo
-  , fabGetConfig
-  , fabPutConfig
-    -- * Insertions and lookups for one type of key, for lower level implementations of 'Fab.Core.HasFabStore'.
-  , KeyStore
-  , keyPutValue
-  , keyGetValue
-  , keyGetInfo
-  , keyPutInfo
+  ( HasFabStore(..)
+  , modifyRefab
+  , configure
   ) where
 
-import           Data.Default (Default(def))
-import           Data.Dynamic (Dynamic, fromDynamic, toDyn)
-import           Data.HashMap.Strict (HashMap)
-import qualified Data.HashMap.Strict as HM
-import           Data.Maybe (fromMaybe)
-import           Data.Typeable (Proxy(Proxy), TypeRep, Typeable, cast, typeOf, typeRep)
-import           Fab.Core (Fab(FabVal, Refab))
+import           Data.Default (Default, def)
+import           Data.Proxy (Proxy)
+import           Data.Typeable (Typeable)
+import           Fab.Core
+import           Fab.Result (Result)
 
--- | What something needs in order to be stored in a 'FabStore'.
-type Storable k f = (Fab k f, Typeable f)
+-- | A datastructure that holds configuration information, fabrication
+-- products, and the information required to attempt to rebuild them.
+class HasFabStore s f where
+  -- | Fetch a fabrication product for a key, if it exists.
+  getValue :: forall k. Fab f k => k -> s f -> Maybe (Result (FabVal f k))
 
--- | A fabrication store for a particular type of key.
-data KeyStore k f = KeyStore
-   { keyInfoMap :: !(HashMap k (Refab k f))
-   , keyValMap  :: !(HashMap k (FabVal k f))
-   }
+  -- | Update the stored fabrication product for a key.
+  putValue :: forall k. Fab f k => k -> Result (FabVal f k) -> s f -> s f
 
-deriving instance Fab k f => Show (KeyStore k f)
+  -- | Fetch the rebuild information for a fabrication key.
+  --
+  -- Note that this information must have a `Default` instance and thus can be
+  -- synthesized if needed.
+  getRefab :: forall k. Fab f k => k -> s f -> Refab f k
 
-instance Storable k f => Default (KeyStore k f) where
-  def = KeyStore mempty mempty
+  -- | Update the rebuild information for a fabrication key.
+  putRefab :: forall k. Fab f k => k -> Refab f k -> s f -> s f
 
--- | Update the value for a key in a 'KeyStore'.
-keyPutValue :: Storable k f => k -> FabVal k f -> KeyStore k f -> KeyStore k f
-keyPutValue k v ks = ks { keyValMap = HM.insert k v $ keyValMap ks }
+  -- | Fetch some configuration information of a particular type.
+  --
+  -- This is useful for things like a database backend (to carry connection
+  -- information), or caching rebuilders (which rebuild after some configurable
+  -- amount of time has passed).
+  getConfig :: forall c. (Default c, Typeable c) => s f -> c
+  default getConfig :: forall c. (Default c) => s f -> c
+  getConfig = const def
 
--- | Get the value for a key from a 'KeyStore'.
-keyGetValue :: Storable k f => k -> KeyStore k f -> Maybe (FabVal k f)
-keyGetValue k = HM.lookup k . keyValMap
+  -- | Replace configuration information of a particular type.
+  --
+  -- Typically this would only be called during setup.
+  putConfig :: forall c. (Typeable c) => c -> s f -> s f
+  default putConfig :: forall c. c -> s f -> s f
+  putConfig _ = id
 
--- | Update the rebuild info for a key in a 'KeyStore'.
-keyPutInfo :: Storable k f => k -> Refab k f -> KeyStore k f -> KeyStore k f
-keyPutInfo k i ks = ks { keyInfoMap = HM.insert k i $ keyInfoMap ks }
+instance HasFabStore Proxy f where
+  getValue _ _ = Nothing
+  putValue _ _ = id
+  getRefab _ _ = def
+  putRefab _ _ = id
 
--- | Get the rebuild info for a key from a 'KeyStore'.
-keyGetInfo :: Storable k f => k -> KeyStore k f -> Refab k f
-keyGetInfo k = fromMaybe def . HM.lookup k . keyInfoMap
+-- | Modify the refab information for a key with a function.
+modifyRefab :: (Fab f k, Monad f, HasFabStore s f) => k -> (Refab f k -> Refab f k) -> s f -> s f
+modifyRefab k f s = putRefab k (f $ getRefab k s) s
 
--- | An existential wrapper around some 'KeyStore'.
-data SubStore (f :: * -> *) = forall k. Storable k f => SubStore !(KeyStore k f)
-
-deriving instance Show (SubStore f)
-
--- | A fabrication store, which tracks fabrication values and rebuild
--- information for any fabrication key.
-data FabStore f = FabStore (HashMap TypeRep (SubStore f)) (HashMap TypeRep Dynamic)
-  deriving (Show)
-
-instance Default (FabStore f) where
-  def = FabStore mempty mempty
-
--- | Extract the 'KeyStore' for a particular (type of) key from a 'FabStore f'.
-getKeyStore :: forall k f. Storable k f => k -> FabStore f -> KeyStore k f
-getKeyStore k (FabStore hm _) = fromMaybe def $ do
-  SubStore ss <- HM.lookup (typeOf k) hm
-  cast ss
-
--- | Update the 'KeyStore' for a particular (type of) key in a 'FabStore f'.
-putKeyStore :: forall k f. Storable k f => k -> KeyStore k f -> FabStore f -> FabStore f
-putKeyStore k ks (FabStore hm cm) = FabStore (HM.insert (typeOf k) (SubStore ks) hm) cm
-
--- | Apply a function to the 'KeyStore' for a particular (type of) key in a 'FabStore f'.
-overKeyStore :: forall k f. Storable k f => k -> (KeyStore k f -> KeyStore k f) -> FabStore f -> FabStore f
-overKeyStore k f s = putKeyStore k (f $ getKeyStore k s) s
-
--- | Fetch a value for a key from a 'FabStore f'.
-fabGetValue :: Storable k f => k -> FabStore f -> Maybe (FabVal k f)
-fabGetValue k = keyGetValue k . getKeyStore k
-
--- | Update a value for a key in a 'FabStore f'.
-fabPutValue :: Storable k f => k -> FabVal k f -> FabStore f -> FabStore f
-fabPutValue k v = overKeyStore k (keyPutValue k v)
-
--- | Fetch rebuild information for a (type of) key from a 'FabStore f'.
-fabGetInfo :: Storable k f => k -> FabStore f -> Refab k f
-fabGetInfo k = keyGetInfo k . getKeyStore k
-
--- | Update rebuild information for a (type of) key in a 'FabStore f'.
-fabPutInfo :: Storable k f => k -> Refab k f -> FabStore f -> FabStore f
-fabPutInfo k = overKeyStore k . keyPutInfo k
-
--- | Get some configuration data from the store.
-fabGetConfig :: forall c f. (Default c, Typeable c) => FabStore f -> c
-fabGetConfig (FabStore _ cm) = fromMaybe def $ fromDynamic =<< HM.lookup (typeRep (Proxy @c)) cm
-
--- | Put some configuration data into the store.
-fabPutConfig :: forall c f. (Typeable c) => c -> FabStore f -> FabStore f
-fabPutConfig c (FabStore hm cm) = FabStore hm $ HM.insert (typeOf c) (toDyn c) cm
+-- | Add configuration information.
+--
+-- Note that this should usually only be done before fabricating any products -
+-- most refabbers will not check whether any configuration information has
+-- changed! And there is no easy method to intercept what configuration
+-- information is used for fabrication.
+configure :: (HasFabStore s f, Typeable c) => (a -> c) -> a -> s f -> s f
+configure f x = putConfig (f x)

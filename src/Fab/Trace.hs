@@ -19,6 +19,7 @@ module Fab.Trace
 import           Data.Default (Default, def)
 import           Data.Hashable (Hashable(hash))
 import           Fab.Core (Fab, FabVal)
+import           Fab.Result (Result)
 
 -- | Replace with a real hash.
 newtype Hash a = Hash Int
@@ -27,15 +28,15 @@ newtype Hash a = Hash Int
 mkHash :: Hashable a => a -> Hash a
 mkHash = Hash . hash
 
-data TracePair f = forall k. Fab k f => TracePair !k !(Hash (FabVal k f))
+data TracePair f = forall k. Fab f k => TracePair !k !(Hash (Result (FabVal f k)))
 
 deriving instance Show (TracePair f)
 
-data Trace v f = Trace
+data Trace f v = Trace
    { traceDeps :: [TracePair f]
    , traceVal  :: v
    }
   deriving (Show)
 
-instance Default v => Default (Trace v f) where
+instance Default v => Default (Trace f v) where
   def = Trace def def

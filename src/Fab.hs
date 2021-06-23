@@ -6,9 +6,15 @@ Description : Caching Refabber(s).
 
 module Fab
   ( Fab(..)
+  , FabT
+  , Result(..)
     -- * Implementing Fab
-  , Scheduler
-  , Fabber
+  , FabKey
+  , FabValue
+  , fab
+  , cachedFab
+  , config
+  , throw
     -- * Refabbers
   , Refabber(..)
     -- ** Simple
@@ -19,16 +25,14 @@ module Fab
     -- ** Tracing
   , VerifyTrace
     -- * Schedulers
-  , simpleFab
-  , logFab
+  , busy
+  , simple
     -- * Store
-  , FabT
-  , runFabT
   , HasFabStore(..)
   , configure
-  , getExistingValue
+  , FabStore
     -- * Existential Wrappers
-  , FabKey(..)
+  , SomeFabKey(..)
   , HoldsFabKey(..)
   , FabPair(..)
   , HoldsFabPair(..)
@@ -40,5 +44,7 @@ import           Fab.Existential
 import           Fab.Refab.Avoid
 import           Fab.Refab.Cache
 import           Fab.Refab.VerifyTrace
+import           Fab.Result
 import           Fab.Scheduler
-import           Fab.Transformer
+import           Fab.Store
+import           Fab.Store.HashMap

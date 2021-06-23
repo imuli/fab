@@ -2,6 +2,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
 {-|
@@ -15,7 +17,8 @@ module Fab.Refab.VerifyTrace
   ) where
 
 import           Data.Default (Default)
-import           Fab.Core (Fab, FabVal, Refabber, finalize, record, verify)
+import           Fab.Core
+import           Fab.Result (Result, toResult)
 import           Fab.Trace (Hash, Trace(..), TracePair(..), mkHash)
 
 -- | Verifying Traces record the hashes of the immediate dependencies and that
@@ -25,13 +28,13 @@ import           Fab.Trace (Hash, Trace(..), TracePair(..), mkHash)
 --
 -- This allows us to skip rebuilding if nothing has changed for this key since
 -- the last build, but we drop older traces than that.
-newtype VerifyTrace v f = VT (Trace (Maybe (Hash v)) f)
+newtype VerifyTrace f v = VT (Trace f (Maybe (Hash (Result v))))
   deriving (Default, Show)
 
-instance (Fab k f, v ~ FabVal k f) => Refabber (VerifyTrace v f) k f where
+instance (Fab f k, v ~ FabVal f k) => Refabber f k (VerifyTrace f v) where
   finalize _ v = pure $ \(VT t) -> VT t { traceVal = Just $ mkHash v }
   record _ k' v' = pure $ \(VT t) -> VT t { traceDeps = TracePair k' (mkHash v') : traceDeps t }
-  verify f _ v (VT Trace{..})
+  verify _ v (VT Trace{..})
     | Just (mkHash v) /= traceVal = pure False
     | otherwise = all id <$> traverse checkTracePair traceDeps
-        where checkTracePair (TracePair k hv) = (hv ==) . mkHash <$> f k
+        where checkTracePair (TracePair k hv) = (hv ==) . mkHash <$> toResult (fab @f k)
