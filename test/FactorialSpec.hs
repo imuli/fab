@@ -12,6 +12,7 @@ import           Test.Hspec.QuickCheck
 import           Test.QuickCheck
 
 import           Control.Exception (ArithException(DivideByZero), toException)
+import           Control.Monad.Trans.State.Strict (runStateT)
 import           Data.Default (def)
 import           Data.Functor.Identity (runIdentity)
 import           Data.Hashable (Hashable)
@@ -38,5 +39,5 @@ spec = do
       let nf = runIdentity $ busy $ fab $ Factorial $ negate (abs n) - 1
        in nf === Throw (toException DivideByZero)
     prop "Factorial n stores Factorial (n-1)" $ \(n :: Word) ->
-      let (_, nf) = runIdentity $ simple @FabStore def $ (,) <$> fab (Factorial $ n + 1) <*> cachedFab (Factorial n)
+      let nf = fst . runIdentity . flip runStateT def $ simple @FabStore $ (,) <$> fab (Factorial $ n + 1) <*> cachedFab (Factorial n)
        in nf === Pure (product [1..n+1], Just $ product [1..n])
