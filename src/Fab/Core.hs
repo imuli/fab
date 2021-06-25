@@ -107,17 +107,17 @@ class (Show i, Default i) => Refabber f k i where
 instance Refabber f k ()
 
 -- | Request something from the Scheduler.
-data FabRequest f k a where
+data FabRequest f a where
    -- | Request a configuration value.
-   ForConfig :: (Typeable k, Default k) => FabRequest f k k
+   ForConfig :: (Typeable k, Default k) => FabRequest f k
    -- | Request a that a key be fabricated.
-   ForKey :: Fab f k => k -> FabRequest f k (FabVal f k)
+   ForKey :: Fab f k => k -> FabRequest f (FabVal f k)
    -- | Request a key from the store, but don't rebuild it if it's stale.
-   ForCachedKey :: Fab f k => k -> FabRequest f k (Maybe (FabVal f k))
+   ForCachedKey :: Fab f k => k -> FabRequest f (Maybe (FabVal f k))
    -- | Request multiple things.
-   ForBoth :: FabRequest f k a -> FabRequest f k' a' -> FabRequest f (k, k') (a, a')
+   ForBoth :: FabRequest f a -> FabRequest f a' -> FabRequest f (a, a')
 
-deriving instance Show (FabRequest f k a)
+deriving instance Show (FabRequest f a)
 
 -- | Request that the scheduler fabricate this key.
 fab :: (Applicative f, Fab f k) => k -> FabT f (FabVal f k)
@@ -167,7 +167,7 @@ instance Monad f => Monad (FabT f) where
 data FabResult f a
    = Value a
    | Error SomeException
-   | forall k b. Request (FabRequest f k b) (b -> FabT f a)
+   | forall b. Request (FabRequest f b) (b -> FabT f a)
 
 instance Show a => Show (FabResult f a) where
   showsPrec prec (Value a)     = showParen (prec > 10) $ showString "Value " . showsPrec 11 a

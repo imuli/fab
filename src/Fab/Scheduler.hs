@@ -55,7 +55,7 @@ simpleResult _ (Error a)       = pure (Throw a)
 simpleResult r (Request req c) = simpleResolve r c req
 
 -- FIXME It seems like the rest of these could be... simplier, or at least less verbose.
-simpleResolve :: SchedulerC s t f => Recorder s f -> (b -> FabT f a) -> FabRequest f k b -> t f (Result a)
+simpleResolve :: SchedulerC s t f => Recorder s f -> (b -> FabT f a) -> FabRequest f b -> t f (Result a)
 simpleResolve r c = \case
        ForConfig -> gets getConfig >>= simpleWith r . c
        ForCachedKey k -> do
