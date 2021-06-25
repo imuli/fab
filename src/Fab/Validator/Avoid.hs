@@ -4,15 +4,15 @@
 {-|
 Copyright   : Unlicense (Public Domain)
 Stability   : stable
-Description : The Avoiding Refabber.
+Description : The Avoiding Validator.
 -}
 
-module Fab.Refab.Avoid
+module Fab.Validator.Avoid
   ( Avoid
   ) where
 
 import           Data.Default (Default, def)
-import           Fab.Core (Refabber, verify)
+import           Fab.Core (Validator, verify)
 
 -- | Only fabricate a value when none is present.
 --
@@ -29,5 +29,5 @@ data Avoid
 instance Default Avoid where
   def = Avoid
 
-instance Refabber f k Avoid where
+instance Validator f k Avoid where
   verify _ _ _ = pure True

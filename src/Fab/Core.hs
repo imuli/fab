@@ -33,7 +33,7 @@ module Fab.Core
   , FabResult(..)
   , FabRequest(..)
   , Request(..)
-  , Refabber(..)
+  , Validator(..)
   ) where
 
 import           Control.Applicative (Alternative, empty, (<|>))
@@ -59,11 +59,11 @@ type FabValue v = (Show v, Typeable v, Hashable v)
 --
 -- You can't actually request fabrication of anything weaker than an
 -- 'Applicative', and can't run it in anything weaker than a 'Monad'...
-class (FabKey k, Refabber f k (Refab f k), FabValue (FabVal f k)) => Fab f k where
+class (FabKey k, Validator f k (Validation f k), FabValue (FabVal f k)) => Fab f k where
 
   -- | The information required to test whether we need to rebuild the key.
-  type family Refab f k
-  type instance Refab f k = ()
+  type family Validation f k
+  type instance Validation f k = ()
 
   -- | What sort of values does this key produce?
   type family FabVal f k
@@ -74,39 +74,39 @@ class (FabKey k, Refabber f k (Refab f k), FabValue (FabVal f k)) => Fab f k whe
   -- recreate a particular subgoal). Instead it should call 'fab'.
   fabricate :: k -> FabT f (FabVal f k)
 
--- | Refabbers implement this typeclass, so that to change refabbers for a
--- particular key you only need to change 'Refab'.
+-- | Validators implement this typeclass, so that to change validation methods
+-- for a particular key you only need to change 'Validation'.
 --
 -- The general ideal is that we're given keys and 'Result's at various hooks in
 -- the process, which lets us record information about the build process. This
--- is heavily designed for 'Fab.Trace.Trace'-derived 'Refabber's and may change
+-- is heavily designed for 'Fab.Trace.Trace'-derived 'Validator's and may change
 -- if other types have more needs.
 --
 -- The defaults implementation keeps no information and never 'verify's.
-class (Show i, Default i) => Refabber f k i where
+class (Show i, Default i) => Validator f k i where
 
   -- | Update fabrication information given a final result.
   --
   -- This has type @f (i -> i)@ to allow queries to @f@, for example to allow
-  -- the 'Fab.Refab.Cache.Cache' refabber to check the time.
-  finalize :: (Refab f k ~ i, Applicative f) => k -> Result (FabVal f k) -> f (i -> i)
+  -- the 'Fab.Validator.Cache.Cache' validator to check the time.
+  finalize :: (Validation f k ~ i, Applicative f) => k -> Result (FabVal f k) -> f (i -> i)
   finalize _ _ = pure id
 
   -- | Update fabrication information given a dependancy.
   --
   -- This has type @f (i -> i)@ to allow queries to @f@, mirroring finalize.
-  record :: (Refab f k ~ i, Fab f t, Applicative f) => k -> t -> Result (FabVal f t) -> f (i -> i)
+  record :: (Validation f k ~ i, Fab f t, Applicative f) => k -> t -> Result (FabVal f t) -> f (i -> i)
   record _ _ _ = pure id
 
   -- | Verify a key-value-info set.
   --
-  -- This may call the scheduler. 'Fab.Refab.VerifyTrace.VerifyTrace', for
+  -- This may call the scheduler. 'Fab.Validator.VerifyTrace.VerifyTrace', for
   -- example, will check to make sure all the immediate dependencies are up to
   -- date.
-  verify :: (Refab f k ~ i, Monad f) => k -> Result (FabVal f k) -> i -> FabT f Bool
+  verify :: (Validation f k ~ i, Monad f) => k -> Result (FabVal f k) -> i -> FabT f Bool
   verify _ _ _ = pure False
 
-instance Refabber f k ()
+instance Validator f k ()
 
 -- | The various things can can be requested from the 'Fab.Scheduler.Scheduler'.
 data FabRequest f a where

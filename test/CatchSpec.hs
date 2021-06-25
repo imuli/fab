@@ -28,7 +28,7 @@ data Catch
 instance Hashable Catch
 
 instance (Monad f) => Fab f Catch where
-  type instance Refab f Catch = Avoid
+  type instance Validation f Catch = Avoid
   type instance FabVal f Catch = ()
   fabricate ItFails      = throw Empty
   fabricate ItWorks      = pure ()

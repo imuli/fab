@@ -11,7 +11,7 @@ Description : Fabrication stores and helpers.
 
 module Fab.Store
   ( HasFabStore(..)
-  , modifyRefab
+  , modifyValidation
   , configure
   ) where
 
@@ -34,10 +34,10 @@ class HasFabStore s f where
   --
   -- Note that this information must have a `Default` instance and thus can be
   -- synthesized if needed.
-  getRefab :: forall k. Fab f k => k -> s f -> Refab f k
+  getValidation :: forall k. Fab f k => k -> s f -> Validation f k
 
   -- | Update the rebuild information for a fabrication key.
-  putRefab :: forall k. Fab f k => k -> Refab f k -> s f -> s f
+  putValidation :: forall k. Fab f k => k -> Validation f k -> s f -> s f
 
   -- | Fetch some configuration information of a particular type.
   --
@@ -58,17 +58,17 @@ class HasFabStore s f where
 instance HasFabStore Proxy f where
   getValue _ _ = Nothing
   putValue _ _ = id
-  getRefab _ _ = def
-  putRefab _ _ = id
+  getValidation _ _ = def
+  putValidation _ _ = id
 
--- | Modify the refab information for a key with a function.
-modifyRefab :: (Fab f k, Monad f, HasFabStore s f) => k -> (Refab f k -> Refab f k) -> s f -> s f
-modifyRefab k f s = putRefab k (f $ getRefab k s) s
+-- | Modify the validation information for a key.
+modifyValidation :: (Fab f k, Monad f, HasFabStore s f) => k -> (Validation f k -> Validation f k) -> s f -> s f
+modifyValidation k f s = putValidation k (f $ getValidation k s) s
 
 -- | Add configuration information.
 --
 -- Note that this should usually only be done before fabricating any products -
--- most refabbers will not check whether any configuration information has
+-- most validators will not check whether any configuration information has
 -- changed! And there is no easy method to intercept what configuration
 -- information is used for fabrication.
 configure :: (HasFabStore s f, Typeable c) => (a -> c) -> a -> s f -> s f

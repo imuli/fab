@@ -9,10 +9,10 @@
 {-|
 Copyright   : Unlicense (Public Domain)
 Stability   : experimental
-Description : Trace Verifying Refabber(s).
+Description : Trace Verifying Validator(s).
 -}
 
-module Fab.Refab.VerifyTrace
+module Fab.Validator.VerifyTrace
   ( VerifyTrace
   ) where
 
@@ -31,7 +31,7 @@ import           Fab.Trace (Hash, Trace(..), TracePair(..), mkHash)
 newtype VerifyTrace f v = VT (Trace f (Maybe (Hash (Result v))))
   deriving (Default, Show)
 
-instance (Fab f k, v ~ FabVal f k) => Refabber f k (VerifyTrace f v) where
+instance (Fab f k, v ~ FabVal f k) => Validator f k (VerifyTrace f v) where
   finalize _ v = pure $ \(VT t) -> VT t { traceVal = Just $ mkHash v }
   record _ k' v' = pure $ \(VT t) -> VT t { traceDeps = TracePair k' (mkHash v') : traceDeps t }
   verify _ v (VT Trace{..})

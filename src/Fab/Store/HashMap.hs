@@ -35,17 +35,17 @@ import           Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
 import           Data.Maybe (fromMaybe)
 import           Data.Typeable (Proxy(Proxy), TypeRep, Typeable, cast, typeOf, typeRep)
-import           Fab.Core (Fab(FabVal, Refab))
+import           Fab.Core (Fab(FabVal, Validation))
 import           Fab.Result (Result)
-import           Fab.Store (HasFabStore, getConfig, getRefab, getValue, putConfig, putRefab,
-                     putValue)
+import           Fab.Store (HasFabStore, getConfig, getValidation, getValue, putConfig,
+                     putValidation, putValue)
 
 -- | What something needs in order to be stored in a 'FabStore'.
 type Storable f k = (Fab f k, Typeable f)
 
 -- | A fabrication store for a particular type of key.
 data KeyStore f k = KeyStore
-   { keyInfoMap :: !(HashMap k (Refab f k))
+   { keyInfoMap :: !(HashMap k (Validation f k))
    , keyValMap  :: !(HashMap k (Result (FabVal f k)))
    }
 
@@ -63,11 +63,11 @@ keyGetValue :: Storable f k => k -> KeyStore f k -> Maybe (Result (FabVal f k))
 keyGetValue k = HM.lookup k . keyValMap
 
 -- | Update the rebuild info for a key in a 'KeyStore'.
-keyPutInfo :: Storable f k => k -> Refab f k -> KeyStore f k -> KeyStore f k
+keyPutInfo :: Storable f k => k -> Validation f k -> KeyStore f k -> KeyStore f k
 keyPutInfo k i ks = ks { keyInfoMap = HM.insert k i $ keyInfoMap ks }
 
 -- | Get the rebuild info for a key from a 'KeyStore'.
-keyGetInfo :: Storable f k => k -> KeyStore f k -> Refab f k
+keyGetInfo :: Storable f k => k -> KeyStore f k -> Validation f k
 keyGetInfo k = fromMaybe def . HM.lookup k . keyInfoMap
 
 -- | An existential wrapper around some 'KeyStore'.
@@ -100,8 +100,8 @@ overKeyStore k f s = putKeyStore k (f $ getKeyStore k s) s
 instance Typeable f => HasFabStore FabStore f where
   getValue k = keyGetValue k . getKeyStore k
   putValue k v = overKeyStore k (keyPutValue k v)
-  getRefab k = keyGetInfo k . getKeyStore k
-  putRefab k = overKeyStore k . keyPutInfo k
+  getValidation k = keyGetInfo k . getKeyStore k
+  putValidation k = overKeyStore k . keyPutInfo k
   getConfig :: forall c. (Default c, Typeable c) => FabStore f -> c
   getConfig (FabStore _ cm) = fromMaybe def $ fromDynamic =<< HM.lookup (typeRep (Proxy @c)) cm
   putConfig c (FabStore hm cm) = FabStore hm $ HM.insert (typeOf c) (toDyn c) cm

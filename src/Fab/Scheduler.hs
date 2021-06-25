@@ -26,7 +26,8 @@ import           Control.Monad.Trans.Class (MonadTrans, lift)
 import           Data.Proxy (Proxy(Proxy))
 import           Fab.Core
 import           Fab.Result (Result(Pure))
-import           Fab.Store (HasFabStore, getConfig, getRefab, getValue, modifyRefab, putValue)
+import           Fab.Store (HasFabStore, getConfig, getValidation, getValue, modifyValidation,
+                     putValue)
 
 -- | Constraints required for a scheduler.
 type SchedulerC s t f = (Monad f, HasFabStore s f, MonadState (s f) (t f), MonadTrans t)
@@ -42,7 +43,7 @@ norec :: Applicative f => Recorder s f
 norec _ _ = pure id
 
 -- | Single threaded complete and (essentially) minimal scheduler, which
--- respects 'Refab' information.
+-- respects 'Validation' information.
 simple :: forall s t f. Monad f => Scheduler s t f
 simple = simpleWith norec
 
@@ -77,7 +78,7 @@ simpleFetch :: (SchedulerC s t f, Fab f k) => k -> t f (Result (Maybe (FabVal f 
 simpleFetch k = maybe (pure (pure Nothing)) check =<< gets (getValue k)
   where
     check v = do
-      gets (getRefab k) >>= simpleWith norec . verify k v >>= \case
+      gets (getValidation k) >>= simpleWith norec . verify k v >>= \case
         Pure True -> pure (Just <$> v)
         _         -> pure (pure Nothing)
 
@@ -88,10 +89,10 @@ simpleBuild k = maybe run check =<< gets (getValue k)
     run = do
       (v) <- simpleWith norec $ fabricate k
       fin <- lift $ finalize k v
-      modify (putValue k v . modifyRefab k fin)
+      modify (putValue k v . modifyValidation k fin)
       pure v
     check v = do
-      gets (getRefab k) >>= simpleWith norec . verify k v >>= \case
+      gets (getValidation k) >>= simpleWith norec . verify k v >>= \case
         Pure True -> pure v
         _         -> run
 

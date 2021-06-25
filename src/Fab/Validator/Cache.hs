@@ -5,10 +5,10 @@
 {-|
 Copyright   : Unlicense (Public Domain)
 Stability   : experimental
-Description : Caching Refabber(s).
+Description : Caching Validator(s).
 -}
 
-module Fab.Refab.Cache
+module Fab.Validator.Cache
   ( CacheTimeout(..)
   , Cache
   ) where
@@ -16,7 +16,7 @@ module Fab.Refab.Cache
 import           Control.Applicative (liftA2)
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Data.Default (Default, def)
-import           Fab.Core (Refabber, config, finalize, verify)
+import           Fab.Core (Validator, config, finalize, verify)
 import           GHC.Clock (getMonotonicTime)
 
 -- | How long to cache entries for `Cache`, in seconds.
@@ -29,7 +29,7 @@ newtype CacheTimeout = CacheTimeout Double
 instance Default CacheTimeout where
   def = 5 * 60
 
--- | Refabricate based on how long it has been since the old value was fabricated.
+-- | Validate based on how long it has been since the old value was fabricated.
 newtype Cache = Cache CacheTimeout
   deriving (Show)
 
@@ -39,6 +39,6 @@ instance Default Cache where
 now :: MonadIO f => f CacheTimeout
 now = CacheTimeout <$> liftIO getMonotonicTime
 
-instance MonadIO f => Refabber f k Cache where
+instance MonadIO f => Validator f k Cache where
   finalize _ _ = const . Cache <$> now
   verify _ _ (Cache expires) = (expires >) <$> liftA2 (+) config now

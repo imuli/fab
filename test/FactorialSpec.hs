@@ -23,7 +23,7 @@ newtype Factorial n = Factorial n
   deriving (Eq, Hashable, Ord, Read, Show)
 
 instance (Num n, Ord n, Show n, Hashable n, Typeable n, Applicative f) => Fab f (Factorial n) where
-  type instance Refab f (Factorial n) = Avoid
+  type instance Validation f (Factorial n) = Avoid
   type instance FabVal f (Factorial n) = n
   fabricate (Factorial n) | n < 0 = throw DivideByZero
                           | n == 0 = pure 1
@@ -31,7 +31,7 @@ instance (Num n, Ord n, Show n, Hashable n, Typeable n, Applicative f) => Fab f 
 
 spec :: Spec
 spec = do
-  describe "Factorial Test for Avoid Refabber" $ do
+  describe "Factorial Test for Avoid Validator" $ do
     prop "Factorial n == factorial n, with busy" $ \(n :: Word) ->
       let nf = runIdentity $ busy $ fab $ Factorial n
        in nf === Pure (product [1..n])

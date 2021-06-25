@@ -1,22 +1,27 @@
 {-|
 Copyright   : Unlicense (Public Domain)
 Stability   : experimental
-Description : Caching Refabber(s).
+Description : Fabrication systems with customizable invalidation rules and schedulers.
 -}
 
 module Fab
   ( Fab(..)
   , FabT
+    -- * Handling the results of fabrications.
   , Result(..)
-    -- * Implementing Fab
+  , fromResult
+  , toResult
+    -- * Helpers for implementing the 'Fab' type class.
+    -- ** Constraint helpers.
   , FabKey
   , FabValue
+    -- ** Making requests of the 'Scheduler'.
   , fab
   , cachedFab
   , config
   , throw
-    -- * Refabbers
-  , Refabber(..)
+    -- * 'Validator's
+  , Validator(..)
     -- ** Simple
   , Avoid
     -- ** Caching
@@ -24,13 +29,14 @@ module Fab
   , CacheTimeout
     -- ** Tracing
   , VerifyTrace
-    -- * Schedulers
+    -- * 'Scheduler's
+  , Scheduler
   , busy
   , simple
     -- * Store
   , HasFabStore(..)
-  , configure
   , FabStore
+  , configure
     -- * Existential Wrappers
   , SomeFabKey(..)
   , HoldsFabKey(..)
@@ -41,10 +47,10 @@ module Fab
 
 import           Fab.Core
 import           Fab.Existential
-import           Fab.Refab.Avoid
-import           Fab.Refab.Cache
-import           Fab.Refab.VerifyTrace
 import           Fab.Result
 import           Fab.Scheduler
 import           Fab.Store
 import           Fab.Store.HashMap
+import           Fab.Validator.Avoid
+import           Fab.Validator.Cache
+import           Fab.Validator.VerifyTrace
