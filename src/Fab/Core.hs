@@ -44,7 +44,7 @@ import           Control.Monad.Trans.Class (MonadTrans, lift)
 import           Data.Default (Default)
 import           Data.Hashable (Hashable)
 import           Data.Typeable (Typeable)
-import           Fab.Result (Result)
+import           Fab.Result (Result, ResultException(Empty, Fail))
 import           GHC.Generics (Generic)
 
 -- | Type helper to constrain your fabrication key (or segments there of).
@@ -137,6 +137,8 @@ config = FabT . pure $ Request ForConfig pure
 newtype FabT f a = FabT (f (FabResult f a))
   deriving (Generic)
 
+deriving instance (forall t. Show t => Show (f t), Show a) => Show (FabT f a)
+
 -- | Compute as much of a 'FabT' as we can without outside help.
 runFabT :: FabT f a -> f (FabResult f a)
 runFabT (FabT a) = a
@@ -190,10 +192,32 @@ instance Monad f => Monad (FabResult f) where
   Error e >>= _     = Error e
   Request r c >>= f = Request r $ c >=> FabT . pure . f
 
+instance Monad f => Alternative (FabResult f) where
+  empty = throwM Empty
+  a <|> b = a `catch` (\(_ :: SomeException) -> b)
+
+instance MonadFail f => MonadFail (FabResult f) where
+  fail = throwM . Fail
+
+instance Monad f => MonadThrow (FabResult f) where
+  throwM = Error . toException
+
+instance Monad f => MonadCatch (FabResult f) where
+  catch (Value a) _          = Value a
+  catch (Error e) handle     = maybe (Error e) handle $ fromException e
+  catch (Request r c) handle = Request r $ \b -> catch (c b) (FabT . pure . handle)
+
 -- | Provided for convenience for anyone who wants to throw an error in an
 -- applicative context.
 throw :: (Exception e, Applicative f) => e -> FabT f a
 throw = FabT . pure . Error . toException
+
+instance Monad f => Alternative (FabT f) where
+  empty = throw Empty
+  a <|> b = a `catch` (\(_ :: SomeException) -> b)
+
+instance MonadFail f => MonadFail (FabT f) where
+  fail = throw . Fail
 
 instance Monad f => MonadThrow (FabT f) where
   throwM = throw
@@ -205,10 +229,6 @@ instance Monad f => MonadCatch (FabT f) where
          Value x     -> pure $ Value x
          Error e     -> maybe (pure $ Error e) (runFabT <$> handle) (fromException e)
          Request r c -> pure $ Request r $ \b -> catch (c b) handle
-
-instance Alternative f => Alternative (FabT f) where
-  empty = FabT empty
-  a <|> b = FabT $ runFabT a <|> runFabT b
 
 instance MonadIO f => MonadIO (FabT f) where
   liftIO f = FabT $ Value <$> liftIO f
