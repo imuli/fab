@@ -3,7 +3,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 {-|
 Copyright   : Unlicense (Public Domain)
@@ -18,6 +17,7 @@ module Fab.Scheduler
   , busy
   , simple
   , simpleWith
+  , simpleBuild
   ) where
 
 import           Control.Monad.State.Class (MonadState, gets, modify)
@@ -25,13 +25,14 @@ import           Control.Monad.State.Strict (runStateT)
 import           Control.Monad.Trans.Class (MonadTrans, lift)
 import           Data.Proxy (Proxy(Proxy))
 import           Fab.Core
-import           Fab.Result (Result(Pure, Throw), fromResult)
+import           Fab.Result (Result(Pure))
 import           Fab.Store (HasFabStore, getConfig, getRefab, getValue, modifyRefab, putValue)
 
 -- | Constraints required for a scheduler.
 type SchedulerC s t f = (Monad f, HasFabStore s f, MonadState (s f) (t f), MonadTrans t)
 
--- | A scheduler, takes a fabrication monad, and produces a 'Result' in a 'StateMonad'.
+-- | A scheduler, takes a fabrication monad, and produces a 'Result' in some
+-- 'MonadState' transformer.
 type Scheduler s t f = forall a. SchedulerC s t f => FabT f a -> t f (Result a)
 
 -- | A recorder runs, and updates the store, every time a key is built.
@@ -50,28 +51,27 @@ simpleWith :: SchedulerC s t f => Recorder s f -> FabT f a -> t f (Result a)
 simpleWith r x = lift (runFabT x) >>= simpleResult r
 
 simpleResult :: SchedulerC s t f => Recorder s f -> FabResult f a -> t f (Result a)
-simpleResult _ (Value a)       = pure (Pure a)
-simpleResult _ (Error a)       = pure (Throw a)
-simpleResult r (Request req c) = simpleResolve r c req
+simpleResult _ (Res res) = pure res
+simpleResult r (Req req) = simpleResolve r req
 
 -- FIXME It seems like the rest of these could be... simplier, or at least less verbose.
-simpleResolve :: SchedulerC s t f => Recorder s f -> (b -> FabT f a) -> FabRequest f b -> t f (Result a)
-simpleResolve r c = \case
-       ForConfig -> gets getConfig >>= simpleWith r . c
+simpleResolve :: SchedulerC s t f => Recorder s f -> Request f a -> t f (Result a)
+simpleResolve r (Request req g) = case req of
+       ForConfig -> gets (pure . getConfig) >>= simpleWith r . g
        ForCachedKey k -> do
          v <- simpleFetch k
          case sequence v of
               Nothing -> pure ()
               Just v' -> modify =<< lift (r k v')
-         simpleWith r $ c =<< fromResult v
+         simpleWith r $ g v
        ForKey k -> do
          v <- simpleBuild k
          modify =<< lift (r k v)
-         simpleWith r $ c =<< fromResult v
-       ForBoth a b -> do
-         a' <- simpleResolve r pure a
-         b' <- simpleResolve r pure b
-         simpleWith r $ c =<< (,) <$> fromResult a' <*> fromResult b'
+         simpleWith r $ g v
+simpleResolve r (ReqApp a b g) = do
+         a' <- simpleResolve r a
+         b' <- simpleResolve r b
+         simpleWith r . g $ a' <*> b'
 
 simpleFetch :: (SchedulerC s t f, Fab f k) => k -> t f (Result (Maybe (FabVal f k)))
 simpleFetch k = maybe (pure (pure Nothing)) check =<< gets (getValue k)
@@ -81,6 +81,7 @@ simpleFetch k = maybe (pure (pure Nothing)) check =<< gets (getValue k)
         Pure True -> pure (Just <$> v)
         _         -> pure (pure Nothing)
 
+-- | Build a key with the simple scheduler.
 simpleBuild :: (SchedulerC s t f, Fab f k) => k -> t f (Result (FabVal f k))
 simpleBuild k = maybe run check =<< gets (getValue k)
   where

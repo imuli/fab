@@ -1,20 +1,5 @@
-{-# LANGUAGE ApplicativeDo #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeFamilies #-}
 
 {-|
 Copyright   : Unlicense (Public Domain)
@@ -42,7 +27,10 @@ import           GHC.Generics (Generic)
 data ResultException
    = Empty
    | Fail String
-  deriving (Show)
+  deriving (Eq, Generic, Ord, Read)
+
+instance Show ResultException where
+  show = displayException
 
 instance Exception ResultException where
   displayException Empty      = "empty"

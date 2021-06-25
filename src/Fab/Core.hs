@@ -1,15 +1,12 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -18,6 +15,8 @@
 Copyright   : Unlicense (Public Domain)
 Stability   : experimental
 Description : The core types and type classes for Fab.
+
+This module is for **internal** use, and exports may change without warning.
 -}
 
 module Fab.Core
@@ -30,22 +29,25 @@ module Fab.Core
   , FabT(..)
   , runFabT
   , throw
+  , liftCatch
   , FabResult(..)
   , FabRequest(..)
+  , Request(..)
   , Refabber(..)
   ) where
 
 import           Control.Applicative (Alternative, empty, (<|>))
 import           Control.Exception (Exception, SomeException, fromException, toException)
-import           Control.Monad ((>=>))
 import           Control.Monad.Catch (MonadCatch(catch), MonadThrow(throwM))
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Control.Monad.Trans.Class (MonadTrans, lift)
 import           Data.Default (Default)
 import           Data.Hashable (Hashable)
 import           Data.Typeable (Typeable)
-import           Fab.Result (Result, ResultException(Empty, Fail))
+import           Fab.Result (Result(Pure, Throw), ResultException(Empty, Fail), throwResult,
+                     toResult)
 import           GHC.Generics (Generic)
+import           GHC.Stack (HasCallStack)
 
 -- | Type helper to constrain your fabrication key (or segments there of).
 type FabKey k = (Show k, Typeable k, Eq k, Hashable k)
@@ -106,7 +108,7 @@ class (Show i, Default i) => Refabber f k i where
 
 instance Refabber f k ()
 
--- | Request something from the Scheduler.
+-- | The various things can can be requested from the 'Fab.Scheduler.Scheduler'.
 data FabRequest f a where
    -- | Request a configuration value.
    ForConfig :: (Typeable k, Default k) => FabRequest f k
@@ -114,22 +116,44 @@ data FabRequest f a where
    ForKey :: Fab f k => k -> FabRequest f (FabVal f k)
    -- | Request a key from the store, but don't rebuild it if it's stale.
    ForCachedKey :: Fab f k => k -> FabRequest f (Maybe (FabVal f k))
-   -- | Request multiple things.
-   ForBoth :: FabRequest f a -> FabRequest f a' -> FabRequest f (a, a')
 
 deriving instance Show (FabRequest f a)
 
 -- | Request that the scheduler fabricate this key.
 fab :: (Applicative f, Fab f k) => k -> FabT f (FabVal f k)
-fab k = FabT . pure $ Request (ForKey k) pure
+fab k = FabT . pure . Req $ Request (ForKey k) (throwResult throw)
 
 -- | Request the cached value for this key, if it's valid.
 cachedFab :: (Applicative f, Fab f k) => k -> FabT f (Maybe (FabVal f k))
-cachedFab k = FabT . pure $ Request (ForCachedKey k) pure
+cachedFab k = FabT . pure . Req $ Request (ForCachedKey k) (throwResult throw)
 
 -- | Request a config entry (of a particular type)
 config :: (Applicative f, Typeable a, Default a) => FabT f a
-config = FabT . pure $ Request ForConfig pure
+config = FabT . pure . Req $ Request ForConfig (throwResult throw)
+
+-- | A non-empty tree of 'FabRequest's, with continuations to stitch the computation back together.
+data Request f a
+   -- | A single request.
+   = forall b. Request (FabRequest f b) (Result b -> FabT f a)
+   -- | An applicative composite of requests.
+   | forall b c. ReqApp (Request f (c -> b)) (Request f c) (Result b -> FabT f a)
+
+-- | Compose with the continuation in a 'Request'.
+--
+-- This is used in implementing 'Functor', 'Applicative', 'Monad', 'MonadCatch'
+-- for 'FabT' and 'FabResult'.
+reqComposeFabT :: Request f a -> (FabT f a -> FabT f b) -> Request f b
+reqComposeFabT (Request r g) f  = Request r $ f . g
+reqComposeFabT (ReqApp a b g) f = ReqApp a b $ f . g
+
+-- | This only shows what has been requested, not the continuations.
+instance Show (Request f a) where
+  showsPrec prec = \case
+    Request r _  -> showParen (prec > 10) $ showString "Request " . showsPrec 11 r
+    ReqApp x y _ -> showParen (prec > 10) $ showString "ReqApp " . showsPrec 11 x . showString " " . showsPrec 11 y
+
+instance Functor f => Functor (Request f) where
+  fmap f req = reqComposeFabT req (fmap f)
 
 -- | The core fabrication 'Monad'.
 --
@@ -155,42 +179,44 @@ instance Applicative f => Applicative (FabT f) where
 
 instance Monad f => Monad (FabT f) where
   fa >>= f = FabT $ do
-    a <- runFabT fa
-    case a of
-         Value x     -> (runFabT <$> f) x
-         Error e     -> pure $ Error e
-         Request r c -> pure $ Request r $ c >=> f
+    x <- runFabT fa
+    case x of
+         Res (Pure a)  -> (runFabT <$> f) a
+         Res (Throw e) -> pure . Res $ Throw e
+         Req req       -> pure . Req $ reqComposeFabT req (>>= f)
 
 -- | The intermediate result 'Monad' for fabrication.
 --
 -- This allows us to collect requests until they are required.
 data FabResult f a
-   = Value a
-   | Error SomeException
-   | forall b. Request (FabRequest f b) (b -> FabT f a)
+   -- | 'Fab.Result.Pure' and 'Fab.Result.Thrown' values.
+   = Res (Result a)
+   -- | ReqApp for data.
+   | Req (Request f a)
+  deriving (Generic)
 
 instance Show a => Show (FabResult f a) where
-  showsPrec prec (Value a)     = showParen (prec > 10) $ showString "Value " . showsPrec 11 a
-  showsPrec prec (Error e)     = showParen (prec > 10) $ showString "Error " . showsPrec 11 e
-  showsPrec prec (Request r _) = showParen (prec > 10) $ showString "Request " . showsPrec 11 r
+  showsPrec prec = \case
+    Res r -> showsPrec prec r
+    Req r -> showsPrec prec r
 
 instance Functor f => Functor (FabResult f) where
-  fmap f (Value a)     = Value $ f a
-  fmap _ (Error e)     = Error e
-  fmap f (Request r c) = Request r $ fmap f <$> c
+  fmap f = \case
+    Res r   -> Res $ f <$> r
+    Req req -> Req $ f <$> req
 
 instance Applicative f => Applicative (FabResult f) where
-  pure = Value
-  Value f <*> fa                = f <$> fa
-  Error e <*> _                 = Error e
-  Request r c <*> Value a       = Request r $ fmap ($ a) <$> c
-  Request r _ <*> Error e       = Request r $ \_ -> throw e
-  Request r c <*> Request r' c' = Request (ForBoth r r') (\(b,b') -> c b <*> c' b')
+  pure = Res . Pure
+  Res (Pure f)  <*> a = f <$> a
+  Res (Throw e) <*> _ = Res $ Throw e
+  Req req <*> Res res = Req $ reqComposeFabT req (<*> throwResult throw res)
+  Req req <*> Req re' = Req $ ReqApp req re' $ throwResult throw
 
 instance Monad f => Monad (FabResult f) where
-  Value a >>= f     = f a
-  Error e >>= _     = Error e
-  Request r c >>= f = Request r $ c >=> FabT . pure . f
+  m >>= f = case m of
+                 Res (Pure a)  -> f a
+                 Res (Throw e) -> Res (Throw e)
+                 Req req       -> Req $ reqComposeFabT req (>>= FabT . pure . f)
 
 instance Monad f => Alternative (FabResult f) where
   empty = throwM Empty
@@ -200,17 +226,19 @@ instance MonadFail f => MonadFail (FabResult f) where
   fail = throwM . Fail
 
 instance Monad f => MonadThrow (FabResult f) where
-  throwM = Error . toException
+  throwM = Res . Throw . toException
 
 instance Monad f => MonadCatch (FabResult f) where
-  catch (Value a) _          = Value a
-  catch (Error e) handle     = maybe (Error e) handle $ fromException e
-  catch (Request r c) handle = Request r $ \b -> catch (c b) (FabT . pure . handle)
+  catch m handle =
+    case m of
+         Res (Pure a)  -> pure a
+         Res (Throw e) -> maybe (Res $ Throw e) handle $ fromException e
+         Req req       -> Req $ reqComposeFabT req (`catch` (FabT . pure . handle))
 
 -- | Provided for convenience for anyone who wants to throw an error in an
 -- applicative context.
-throw :: (Exception e, Applicative f) => e -> FabT f a
-throw = FabT . pure . Error . toException
+throw :: (HasCallStack, Exception e, Applicative f) => e -> FabT f a
+throw = FabT . pure . Res . Throw . toException
 
 instance Monad f => Alternative (FabT f) where
   empty = throw Empty
@@ -224,14 +252,18 @@ instance Monad f => MonadThrow (FabT f) where
 
 instance Monad f => MonadCatch (FabT f) where
   catch fa handle = FabT $ do
-    a <- runFabT fa
-    case a of
-         Value x     -> pure $ Value x
-         Error e     -> maybe (pure $ Error e) (runFabT <$> handle) (fromException e)
-         Request r c -> pure $ Request r $ \b -> catch (c b) handle
+    x <- runFabT fa
+    case x of
+         Res (Pure a)  -> pure $ pure a
+         Res (Throw e) -> maybe (pure . Res $ Throw e) (runFabT <$> handle) (fromException e)
+         Req req       -> pure . Req $ reqComposeFabT req (`catch` handle)
 
 instance MonadIO f => MonadIO (FabT f) where
-  liftIO f = FabT $ Value <$> liftIO f
+  liftIO f = FabT $ Res <$> liftIO (toResult f)
 
 instance MonadTrans FabT where
-  lift f = FabT $ Value <$> f
+  lift f = FabT $ pure <$> f
+
+-- | Lift a computation from @f@ into @'FabT' f@, catching any exceptions.
+liftCatch :: MonadCatch f => f a -> FabT f a
+liftCatch f = FabT $ Res <$> toResult f
