@@ -16,7 +16,7 @@ module Fab.Validator.VerifyTrace
   ( VerifyTrace
   ) where
 
-import           Data.Default (Default)
+import           Data.Default (Default, def)
 import           Fab.Core
 import           Fab.Result (Result, toResult)
 import           Fab.Trace (Hash, Trace(..), TracePair(..), mkHash)
@@ -33,7 +33,9 @@ newtype VerifyTrace f v = VT (Trace f (Maybe (Hash (Result v))))
 
 instance (Fab f k, v ~ FabVal f k) => Validator f k (VerifyTrace f v) where
   finalize _ v = pure $ \(VT t) -> VT t { traceVal = Just $ mkHash v }
-  record _ k' v' = pure $ \(VT t) -> VT t { traceDeps = TracePair k' (mkHash v') : traceDeps t }
+  record _ k' v' = pure $ \(VT t) -> if null $ traceVal t
+                                        then VT t { traceDeps = TracePair k' (mkHash v') : traceDeps t }
+                                        else VT def { traceDeps = [TracePair k' (mkHash v')] }
   verify _ v (VT Trace{..})
     | Just (mkHash v) /= traceVal = pure False
     | otherwise = all id <$> traverse checkTracePair traceDeps
