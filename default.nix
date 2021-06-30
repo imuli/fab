@@ -4,4 +4,5 @@
     enableSeparateDocOutput = true;
     doHaddock = true;
   })
-}: hpkgs.callCabal2nix (builtins.baseNameOf ./.) (pkgs.lib.cleanSource ./.) { inherit mkDerivation; }
+, polytime ? hpkgs.callPackage ../polytime { inherit pkgs hpkgs mkDerivation; }
+}: hpkgs.callCabal2nix (builtins.baseNameOf ./.) (pkgs.lib.cleanSource ./.) { inherit mkDerivation polytime; }

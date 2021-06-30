@@ -19,9 +19,10 @@ module Fab
   , fab
   , cachedFab
   , config
+    -- ** Utilities for error handling.
   , throw
+  , liftCatch
     -- * 'Validator's
-  , Validator(..)
     -- ** Simple
   , Avoid
     -- ** Caching
@@ -33,6 +34,7 @@ module Fab
   , Scheduler
   , busy
   , simple
+  , verbose
     -- * Store
   , HasFabStore(..)
   , FabStore

@@ -14,6 +14,8 @@ module Fab.Scheduler
   ( Scheduler
   , SchedulerC
   , Recorder
+  , Recorder'
+  , PhaseInfo(..)
   , busy
   , simple
   , simpleWith
@@ -38,11 +40,12 @@ type SchedulerC s t f = (Monad f, HasFabStore s f, MonadState (s f) (t f), Monad
 -- 'MonadState' transformer.
 type Scheduler s t f = forall a. SchedulerC s t f => FabT f a -> t f (Result a)
 
+-- | Information about the just-completed phase.
 data PhaseInfo f
    = forall t. Fab f t => Fabricated t (Result (FabVal f t))
    | forall t. Fab f t => Validated t (Result (FabVal f t))
    | forall t. Fab f t => Invalidated t (Result (FabVal f t))
-   | forall t. Fab f t => Fetched t (Result (FabVal f t))
+   | forall t. Fab f t => Fetched t (Maybe (Result (FabVal f t)))
 
 -- | A recorder runs and can update the store after each phase.
 type Recorder' s f = PhaseInfo f -> f (s f -> s f)
@@ -58,6 +61,7 @@ norec _ _ = pure id
 simple :: forall s t f. Monad f => Scheduler s t f
 simple = simpleWith (const $ pure id) norec
 
+-- | The 'simple' scheduler, with logging to standard output after every phase.
 verbose :: forall s t f. MonadIO f => Scheduler s t f
 verbose = simpleWith ((id <$) . liftIO . dolog) norec
   where
@@ -99,9 +103,11 @@ simpleFetch gr k = maybe (pure (pure Nothing)) check =<< gets (getValue k)
     check v = do
       gets (getValidation k) >>= simpleWith gr norec . verify k v >>= \case
         Pure True -> do
-          modify =<< lift (gr $ Fetched k v)
+          modify =<< lift (gr $ Fetched k $ Just v)
           pure (Just <$> v)
-        _         -> pure (pure Nothing)
+        _         -> do
+          modify =<< lift (gr $ Fetched k Nothing)
+          pure (pure Nothing)
 
 -- | Build a key with the simple scheduler.
 simpleBuild :: (SchedulerC s t f, Fab f k) => Recorder' s f -> k -> t f (Result (FabVal f k))
